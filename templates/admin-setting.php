@@ -254,7 +254,8 @@ function render_location_block($index, $pbx_value = '', $rd_value = '', $label_v
     }
     .rmfl-field input[type="text"] { width: 100%; }
 
-    #add_location_btn { display: inline-flex; align-items: center; gap: 6px; }
+    #add_location_btn { display: inline-flex; align-items: center; gap: 6px; line-height: normal; }
+    #add_location_btn .dashicons { width: 16px; height: 16px; font-size: 16px; line-height: 16px; }
 
     /* Referral rows */
     .rmfl-referral-hint {
