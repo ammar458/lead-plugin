@@ -1,0 +1,62 @@
+name: Auto Release on Version Bump
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'rm-form-leads.php'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract plugin version
+        id: version
+        run: |
+          VERSION=$(grep -m1 -oP '(?<=Version:\s)[0-9.]+' rm-form-leads.php)
+          if [ -z "$VERSION" ]; then
+            echo "Could not find Version header in rm-form-leads.php" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if this version was already released
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build plugin zip
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          mkdir -p /tmp/build/rm-form-leads
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='*.zip' \
+            ./ /tmp/build/rm-form-leads/
+          cd /tmp/build && zip -rq "$GITHUB_WORKSPACE/rm-form-leads-${{ steps.version.outputs.version }}.zip" rm-form-leads
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "rm-form-leads-${{ steps.version.outputs.version }}.zip" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --generate-notes
