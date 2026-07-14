@@ -370,7 +370,7 @@ function render_location_block($index, $pbx_value = '', $rd_value = '', $label_v
             <p class="rmfl-card-title"><span class="dashicons dashicons-chart-line"></span> PBX referral sources</p>
             <button type="button" id="show_referrals_btn" class="button" style="margin-bottom:14px;">Fetch referrals from PBX</button>
             <div class="rmfl-referral-hint">
-                Add the matching class to your form. Location 1 uses no number suffix (e.g. <code>form_submit_request-google_ads</code>); Location 2 uses <code>_2</code>, Location 3 uses <code>_3</code>, and so on, matching each location's position above.
+                Add the matching class to your form, using the referral's PBX ID shown below each selection (e.g. <code>form_submit_request-11</code>). Location 1 uses no number suffix; Location 2 uses <code>_2</code>, Location 3 uses <code>_3</code>, and so on, matching each location's position above.
             </div>
             <div id="dropdownContainer">
                 <?php
