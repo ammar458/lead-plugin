@@ -1,11 +1,25 @@
 <?php
+// Returns the values that appear more than once (ignoring blanks), used to
+// stop two locations from silently sharing the same API key.
+function rmfl_find_duplicate_values($values) {
+    $seen = [];
+    $duplicates = [];
+    foreach ($values as $value) {
+        $value = trim($value);
+        if ($value === '') continue;
+        if (isset($seen[$value])) {
+            $duplicates[$value] = true;
+        }
+        $seen[$value] = true;
+    }
+    return array_keys($duplicates);
+}
+
+$validation_error = '';
+
 // Handle form submission and save data
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit'])) {
-    update_option('pbx_enabled', isset($_POST['pbx_enabled']) ? '1' : '');
-    update_option('repair_desk_enabled', isset($_POST['repair_desk_enabled']) ? '1' : '');
-    update_option('error_api_email', sanitize_text_field($_POST['error_api_email'] ?? ''));
-
-    // Save the dynamic location list (each location has its own PBX key and Repair Desk key)
+    // Build the dynamic location list (each location has its own PBX key and Repair Desk key)
     $posted_pbx_keys = isset($_POST['location_pbx_key']) && is_array($_POST['location_pbx_key']) ? $_POST['location_pbx_key'] : [];
     $posted_rd_keys  = isset($_POST['location_rd_key']) && is_array($_POST['location_rd_key']) ? $_POST['location_rd_key'] : [];
     $posted_labels   = isset($_POST['location_label']) && is_array($_POST['location_label']) ? $_POST['location_label'] : [];
@@ -23,18 +37,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit'])) {
     if (empty($locations_to_save)) {
         $locations_to_save[] = ['pbx' => '', 'rd' => '', 'label' => ''];
     }
-    update_option('rmfl_locations', wp_json_encode($locations_to_save));
 
-    if (isset($_POST['pbx_referral']) && is_array($_POST['pbx_referral'])) {
-        $referrals = array_map('sanitize_text_field', $_POST['pbx_referral']);
-        update_option('pbx_referral', json_encode($referrals)); // Save as JSON
-    }
-    if (isset($_POST['repair_desk_referral']) && is_array($_POST['repair_desk_referral'])) {
-        $rd_referrals = array_map('sanitize_text_field', $_POST['repair_desk_referral']);
-        update_option('repair_desk_referral', json_encode($rd_referrals)); // Save as JSON
+    // Each location must use its own API key, otherwise leads would get routed to the wrong place
+    $duplicate_pbx = rmfl_find_duplicate_values(wp_list_pluck($locations_to_save, 'pbx'));
+    $duplicate_rd  = rmfl_find_duplicate_values(wp_list_pluck($locations_to_save, 'rd'));
+    if (!empty($duplicate_pbx) || !empty($duplicate_rd)) {
+        $kinds = [];
+        if (!empty($duplicate_pbx)) $kinds[] = 'PBX API key';
+        if (!empty($duplicate_rd)) $kinds[] = 'Repair Desk API key';
+        $validation_error = 'Each location must use a unique ' . implode(' and ', $kinds) . '. The same key is used by more than one location below — settings were not saved.';
+        // Keep what was submitted so the user can see and fix it, instead of reverting to the saved values
+        $locations = $locations_to_save;
     }
 
-    echo '<div class="notice notice-success is-dismissible rmfl-saved-notice"><p>Settings saved.</p></div>';
+    if (!$validation_error) {
+        update_option('pbx_enabled', isset($_POST['pbx_enabled']) ? '1' : '');
+        update_option('repair_desk_enabled', isset($_POST['repair_desk_enabled']) ? '1' : '');
+        update_option('error_api_email', sanitize_text_field($_POST['error_api_email'] ?? ''));
+        update_option('rmfl_locations', wp_json_encode($locations_to_save));
+
+        if (isset($_POST['pbx_referral']) && is_array($_POST['pbx_referral'])) {
+            $referrals = array_map('sanitize_text_field', $_POST['pbx_referral']);
+            update_option('pbx_referral', json_encode($referrals)); // Save as JSON
+        }
+        if (isset($_POST['repair_desk_referral']) && is_array($_POST['repair_desk_referral'])) {
+            $rd_referrals = array_map('sanitize_text_field', $_POST['repair_desk_referral']);
+            update_option('repair_desk_referral', json_encode($rd_referrals)); // Save as JSON
+        }
+
+        echo '<div class="notice notice-success is-dismissible rmfl-saved-notice"><p>Settings saved.</p></div>';
+    } else {
+        echo '<div class="notice notice-error"><p>' . esc_html($validation_error) . '</p></div>';
+    }
 }
 
 // Register settings
@@ -47,24 +81,34 @@ function my_plugin_register_settings() {
 }
 add_action('admin_init', 'my_plugin_register_settings');
 
-// Retrieve saved settings
-$pbx_enabled = get_option('pbx_enabled', '');
-$repair_desk_enabled = get_option('repair_desk_enabled', '');
-$error_api_email = get_option('error_api_email', '');
-$saved_referrals = json_decode(get_option('pbx_referral'), true) ?? [];
-$repairDesk_referral = json_decode(get_option('repair_desk_referral'), true) ?? [];
+// Retrieve saved settings. If this request just failed validation, re-show what was submitted
+// (including the location list already set above) instead of the stale saved values, so the
+// user can see and fix the duplicate rather than have it silently disappear.
+if ($validation_error) {
+    $pbx_enabled = isset($_POST['pbx_enabled']) ? '1' : '';
+    $repair_desk_enabled = isset($_POST['repair_desk_enabled']) ? '1' : '';
+    $error_api_email = sanitize_text_field($_POST['error_api_email'] ?? '');
+    $saved_referrals = isset($_POST['pbx_referral']) && is_array($_POST['pbx_referral']) ? array_map('sanitize_text_field', $_POST['pbx_referral']) : [];
+    $repairDesk_referral = isset($_POST['repair_desk_referral']) && is_array($_POST['repair_desk_referral']) ? array_map('sanitize_text_field', $_POST['repair_desk_referral']) : [];
+} else {
+    $pbx_enabled = get_option('pbx_enabled', '');
+    $repair_desk_enabled = get_option('repair_desk_enabled', '');
+    $error_api_email = get_option('error_api_email', '');
+    $saved_referrals = json_decode(get_option('pbx_referral'), true) ?? [];
+    $repairDesk_referral = json_decode(get_option('repair_desk_referral'), true) ?? [];
 
-// Retrieve saved locations, migrating from the old single/dual API key options if this is the first load
-$locations = json_decode(get_option('rmfl_locations', ''), true);
-if (!is_array($locations) || empty($locations)) {
-    $legacy_pbx_1 = get_option('pbx_api_key', '');
-    $legacy_rd_1  = get_option('repair_desk_api_key', '');
-    $legacy_pbx_2 = get_option('pbx_api_key_2', '');
-    $legacy_rd_2  = get_option('repair_desk_api_key_2', '');
+    // Retrieve saved locations, migrating from the old single/dual API key options if this is the first load
+    $locations = json_decode(get_option('rmfl_locations', ''), true);
+    if (!is_array($locations) || empty($locations)) {
+        $legacy_pbx_1 = get_option('pbx_api_key', '');
+        $legacy_rd_1  = get_option('repair_desk_api_key', '');
+        $legacy_pbx_2 = get_option('pbx_api_key_2', '');
+        $legacy_rd_2  = get_option('repair_desk_api_key_2', '');
 
-    $locations = [['pbx' => $legacy_pbx_1, 'rd' => $legacy_rd_1, 'label' => '']];
-    if ($legacy_pbx_2 !== '' || $legacy_rd_2 !== '') {
-        $locations[] = ['pbx' => $legacy_pbx_2, 'rd' => $legacy_rd_2, 'label' => ''];
+        $locations = [['pbx' => $legacy_pbx_1, 'rd' => $legacy_rd_1, 'label' => '']];
+        if ($legacy_pbx_2 !== '' || $legacy_rd_2 !== '') {
+            $locations[] = ['pbx' => $legacy_pbx_2, 'rd' => $legacy_rd_2, 'label' => ''];
+        }
     }
 }
 
